@@ -25,6 +25,10 @@ fn main() {
     // コマンドモード管理フラグ
     let mut is_escape_mode = false;
     let mut is_string_mode = false;
+    
+    // ループ
+    let mut loop_count = 1;
+    let mut loop_count_string = String::new();
 
     // メインループ
     loop {
@@ -39,7 +43,6 @@ fn main() {
         let mut chars = command.chars();
 
         while let Some(c) = chars.next() {
-
             if is_string_mode {
                 handle_string_mode(
                     c,
@@ -48,14 +51,22 @@ fn main() {
                     &mut is_string_mode,
                 );
             } else {
-                if handle_command(
-                    c,
-                    &mut buffer,
-                    &mut copy,
-                    &mut secondary_buffer,
-                    &mut is_string_mode,
-                ) {
-                    break; // コマンドが終了信号の場合
+                if c.is_ascii_digit() {
+                    loop_count_string.insert(loop_count_string.len(), c);
+                } else {
+                    loop_count = loop_count_string.parse::<usize>().unwrap_or(1);
+                    loop_count_string = String::new();
+                    for _ in 0..loop_count{
+                        if handle_command(
+                            c,
+                            &mut buffer,
+                            &mut copy,
+                            &mut secondary_buffer,
+                            &mut is_string_mode,
+                        ) {
+                            break; // コマンドが終了信号の場合
+                        }
+                    }
                 }
             }
         }
@@ -152,6 +163,26 @@ fn handle_command(
             for c in copy.buffer.chars().collect::<Vec<char>>() {
                 buffer.add_char(c);
             }
+        },
+
+        'P' => {
+            for c in copy.buffer.chars().collect::<Vec<char>>() {
+                secondary_buffer.insert(secondary_buffer.len(), c);
+            }
+        },
+
+        'x' => {
+            if let Err(_) = fs::File::open(&buffer.filename).and_then(|mut file| file.read_to_string(&mut buffer.buffer)) {
+                println!("Could not open file");
+            }
+        },
+        
+        'z' => {
+            *secondary_buffer = String::new();
+        }
+        '&' => {
+            copy.buffer = buffer.buffer.clone();
+            copy.cursor = buffer.cursor;
         }
         _ => (),
     }

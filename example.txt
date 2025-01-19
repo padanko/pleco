@@ -1,18 +1,1 @@
-# テストプログラム
-
-# インストール方法
-# make; sudo make install
-
-# 動かしてみよう
-# cat example.txt | pleco
-
-aTestTest; # メインバッファに "TestTest" を挿入
-Fff         # カーソルを先頭に戻し、そこから2文字進める（"stTest" の "s" に位置）
->>>>>>      # コピー範囲選択用カーソルを6文字進める（選択範囲: "stTe"）
-c           # 選択範囲 "stTe" をコピー
-R           # メインバッファをリセット（空にする）
-p           # コピーした内容 "stTe" をペースト
-v           # メインバッファの内容を表示
-q           # 終了
-
-# stTeと出てくるはず
+aCargo.toml;iR!x;Latrue;i4rs&4>4rafalse;vq
