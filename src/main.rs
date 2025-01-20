@@ -18,7 +18,7 @@ fn main() {
     if let Some(filename) = args.get(1) {
         buffer.filename = filename.clone();
         if let Err(_) = fs::File::open(filename).and_then(|mut file| file.read_to_string(&mut buffer.buffer)) {
-            println!("Could not open file");
+            println!("?");
         }
     }
 
@@ -34,7 +34,7 @@ fn main() {
     loop {
         let mut command = String::new();
         if io::stdin().read_line(&mut command).is_err() {
-            println!("Failed to read input");
+            println!("?");
             continue;
         }
 
@@ -117,7 +117,7 @@ fn handle_command(
         'R' => {
             buffer.buffer.clear();
             buffer.cursor = 0;
-        }
+        },
         'q' => process::exit(0), // プログラム終了
         'l' => *secondary_buffer = buffer.buffer.len().to_string(),
         'o' => {
@@ -125,13 +125,13 @@ fn handle_command(
                 buffer.add_char(c);
             }
             secondary_buffer.clear();
-        }
+        },
         'i' => *secondary_buffer = buffer.buffer.clone(),
         's' => {
             if let Some(pos) = buffer.buffer.find(&secondary_buffer.to_string()) {
                 buffer.cursor = pos;
             }
-        }
+        },
         '#' => return true, // コマンド終了
         'F' => buffer.cursor = 0,
         'L' => buffer.cursor = buffer.buffer.len(),
@@ -140,24 +140,24 @@ fn handle_command(
             if let Ok(mut file) = fs::File::create(&buffer.filename) {
                 let _ = file.write_all(buffer.buffer.as_bytes());
             }
-        }
+        },
         '!' => {
             buffer.filename = (&secondary_buffer).to_string();
-        }
+        },
         '>' => {
             copy.buffer = buffer.buffer.clone();
             copy.cur_move_right();
-        }
+        },
         '<' => {
             copy.buffer = buffer.buffer.clone();
             copy.cur_move_left();
-        }
+        },
         'c' => {
             copy.buffer = buffer.buffer.clone();
             if let Some(cpbuf) = buffer.buffer.get(buffer.cursor..(copy.cursor)) {
                 copy.buffer = cpbuf.into();
             }
-        }
+        },
 
         'p' => {
             for c in copy.buffer.chars().collect::<Vec<char>>() {
@@ -173,16 +173,31 @@ fn handle_command(
 
         'x' => {
             if let Err(_) = fs::File::open(&buffer.filename).and_then(|mut file| file.read_to_string(&mut buffer.buffer)) {
-                println!("Could not open file");
+                println!("?");
             }
         },
         
         'z' => {
             *secondary_buffer = String::new();
-        }
+        },
         '&' => {
             copy.buffer = buffer.buffer.clone();
             copy.cursor = buffer.cursor;
+        },
+        '^' => {
+            buffer.cursor = copy.cursor;   
+        },
+        '$' => {
+            match fs::create_dir(&secondary_buffer) {
+                Ok(_) => { },
+                Err(_) => { println!("?") }
+            }
+        },
+        '%' => {
+            match fs::remove_file(&secondary_buffer) {
+                Ok(_) => { },
+                Err(_) => { println!("?") }
+            }
         }
         _ => (),
     }
