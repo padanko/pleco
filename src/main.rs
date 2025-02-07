@@ -1,5 +1,10 @@
-use std::fs;
+// PLECo II
+
+use std::collections::HashMap;
 use std::env;
+use std::env::var;
+use std::fmt::format;
+use std::fs;
 use std::io::Write;
 use std::io::{self, Read};
 use std::process;
@@ -7,308 +12,318 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time;
 mod buffer;
+mod lexer;
 
 fn main() {
     let buffer = Arc::new(Mutex::new(buffer::ViewBuffer::new("tmp.txt")));
     let copy = Arc::new(Mutex::new(buffer::ViewBuffer::new("copy")));
     let secondary_buffer = Arc::new(Mutex::new(String::new()));
-
-    let is_escape_mode = Arc::new(Mutex::new(false));
-    let is_string_mode = Arc::new(Mutex::new(false));
-
-    let buffers = Arc::new(Mutex::new(vec!["".into(), "".into(), "".into(), "".into(), "".into()]));
-
-    let buffers_cur = Arc::new(Mutex::new(0));
-
-    let loop_count_string = Arc::new(Mutex::new(String::new()));
-
-    let args: Vec<String> = env::args().collect::<Vec<String>>();
-
-    if args.get(1).unwrap_or(&String::new()) == "" {
-        loop {
-            let mut command = String::new();
-            if io::stdin().read_line(&mut command).is_err() {
-                println!("?");
-                continue;
-            }
-
-            let command = command.trim();
-
-            handle_char(command, &buffer, &is_escape_mode, &is_string_mode, 
-                &copy, &secondary_buffer, &buffers_cur, &buffers,
-                &loop_count_string);
-
+    let vars: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    let vars_i: Arc<Mutex<HashMap<String, i32>>> = Arc::new(Mutex::new(HashMap::new()));
+    loop {
+        let mut command = String::new();
+        if io::stdin().read_line(&mut command).is_err() {
+            println!("?");
+            continue;
         }
-    } else {
-        handle_char(args.get(1).unwrap_or(&String::new()), &buffer, &is_escape_mode, &is_string_mode, 
-            &copy, &secondary_buffer, &buffers_cur, &buffers,
-            &loop_count_string);
-    }
-}
 
+        let command = command.trim();
 
-fn handle_char(
-    command: &str,
-    buffer: &Arc<Mutex<buffer::ViewBuffer>>,
-    is_escape_mode: &Arc<Mutex<bool>>,
-    is_string_mode: &Arc<Mutex<bool>>,
-    copy: &Arc<Mutex<buffer::ViewBuffer>>,
-    secondary_buffer: &Arc<Mutex<String>>,
-    buffers_cursor: &Arc<Mutex<usize>>,
-    buffers: &Arc<Mutex<Vec<String>>>,
-    loop_count_string: &Arc<Mutex<String>>
-) {
-    let mut chars = command.chars();
-    while let Some(c) = chars.next() {
-        let mut is_string_mode_lock = is_string_mode.lock().unwrap();
-        let mut is_escape_mode_lock = is_escape_mode.lock().unwrap();
-
-        if *is_string_mode_lock {
-            handle_string_mode(
-                c,
-                &buffer,
-                &mut is_escape_mode_lock,
-                &mut is_string_mode_lock,
-            );
-        } else {
-            let mut loop_count_string_lock = loop_count_string.lock().unwrap();
-            if c.is_ascii_digit() {
-                loop_count_string_lock.push(c);
-            } else {
-                let loop_count = loop_count_string_lock.parse::<usize>().unwrap_or(1);
-                loop_count_string_lock.clear();
-
-                for _ in 0..loop_count {
-                    if handle_command(
-                        c,
-                        &buffer,
-                        &copy,
-                        &secondary_buffer,
-                        &mut is_string_mode_lock,
-                        &buffers_cursor,
-                        &buffers,
-                    ) {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-fn handle_string_mode(
-    c: char,
-    buffer: &Arc<Mutex<buffer::ViewBuffer>>,
-    is_escape_mode: &mut bool,
-    is_string_mode: &mut bool,
-    
-) {
-    let mut buffer_lock = buffer.lock().unwrap();
-    match c {
-        '\\' if !*is_escape_mode => *is_escape_mode = true,
-        'n' if *is_escape_mode => {
-            buffer_lock.add_char('\n');
-            *is_escape_mode = false;
-        }
-        '\\' if *is_escape_mode => {
-            buffer_lock.add_char('\\');
-            *is_escape_mode = false;
-        }
-        ';' if *is_escape_mode => {
-            buffer_lock.add_char(';');
-            *is_escape_mode = false;
-        }
-        ';' if !*is_escape_mode => *is_string_mode = false,
-        _ => buffer_lock.add_char(c),
+        handle_command(command, &buffer, &copy, &secondary_buffer, &vars, &vars_i);
     }
 }
 
 fn handle_command(
-    c: char,
+    command: &str,
     buffer: &Arc<Mutex<buffer::ViewBuffer>>,
     copy: &Arc<Mutex<buffer::ViewBuffer>>,
     secondary_buffer: &Arc<Mutex<String>>,
-    is_string_mode: &mut bool,
-    buffers_cursor: &Arc<Mutex<usize>>,
-    buffers: &Arc<Mutex<Vec<String>>>,
-) -> bool {
-    match c {
-        'a' => *is_string_mode = true,
-        'v' => {
-            let buffer_lock = buffer.lock().unwrap();
-            println!("{}", buffer_lock.buffer);
-        }
-        'V' => {
-            let buffer_lock = buffer.lock().unwrap();
-            print!("{}", buffer_lock.buffer);
-        }
-        'b' => buffer.lock().unwrap().cur_move_left(),
-        'f' => buffer.lock().unwrap().cur_move_right(),
-        'r' => buffer.lock().unwrap().remove_char(),
-        'R' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            buffer_lock.buffer.clear();
-            buffer_lock.cursor = 0;
-        }
-        'q' => process::exit(0),
-        'l' => {
-            let buffer_lock = buffer.lock().unwrap();
-            *secondary_buffer.lock().unwrap() = buffer_lock.buffer.len().to_string();
-        }
-        'o' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            let mut secondary_buffer_lock = secondary_buffer.lock().unwrap();
-            for c in secondary_buffer_lock.chars() {
-                buffer_lock.add_char(c);
-            }
-            secondary_buffer_lock.clear();
-        }
-        'i' => {
-            let buffer_lock = buffer.lock().unwrap();
-            *secondary_buffer.lock().unwrap() = buffer_lock.buffer.clone();
-        }
-        's' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            let secondary_buffer_lock = secondary_buffer.lock().unwrap();
-            if let Some(pos) = buffer_lock.buffer.find(&*secondary_buffer_lock) {
-                buffer_lock.cursor = pos;
-            }
-        }
-        '#' => return true,
-        'F' => buffer.lock().unwrap().cursor = 0,
-        'L' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            buffer_lock.cursor = buffer_lock.buffer.len();
-        }
-        'S' => {
-            let buffer_lock = buffer.lock().unwrap();
-            if let Ok(mut file) = fs::File::create(&buffer_lock.filename) {
-                let _ = file.write_all(buffer_lock.buffer.as_bytes());
-            }
-        }
-        '!' => {
-            let secondary_buffer_lock = secondary_buffer.lock().unwrap();
-            buffer.lock().unwrap().filename = secondary_buffer_lock.to_string();
-        }
-        '>' => {
-            let buffer_lock = buffer.lock().unwrap();
-            let mut copy_lock = copy.lock().unwrap();
-            copy_lock.buffer = buffer_lock.buffer.clone();
-            copy_lock.cur_move_right();
-        }
-        '<' => {
-            let buffer_lock = buffer.lock().unwrap();
-            let mut copy_lock = copy.lock().unwrap();
-            copy_lock.buffer = buffer_lock.buffer.clone();
-            copy_lock.cur_move_left();
-        }
-        'c' => {
-            let buffer_lock = buffer.lock().unwrap();
-            let mut copy_lock = copy.lock().unwrap();
-            copy_lock.buffer = buffer_lock.buffer.clone();
-            if let Some(cpbuf) = buffer_lock.buffer.get(buffer_lock.cursor..copy_lock.cursor) {
-                copy_lock.buffer = cpbuf.into();
-            }
-        }
-        'p' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            let copy_lock = copy.lock().unwrap();
-            for c in copy_lock.buffer.chars() {
-                buffer_lock.add_char(c);
-            }
-        }
-        'P' => {
-            let mut secondary_buffer_lock = secondary_buffer.lock().unwrap();
-            let copy_lock = copy.lock().unwrap();
-            for c in copy_lock.buffer.chars() {
-                secondary_buffer_lock.push(c);
-            }
-        }
-        'x' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            if fs::File::open(&buffer_lock.filename)
-                .and_then(|mut file| file.read_to_string(&mut buffer_lock.buffer))
-                .is_err()
+    vars: &Arc<Mutex<HashMap<String, String>>>,
+    vars_i: &Arc<Mutex<HashMap<String, i32>>>,
+) {
+    let commands = lexer::Lexer::new(command).tokenize();
+    let mut pc = 0;
+    #[cfg(debug_assertions)]
+    println!("COMMANDS {:?}", commands);
+    while pc < commands.len() {
+        if let Some(com) = (&commands).get(pc) {
+            #[cfg(debug_assertions)]
             {
-                println!("?");
+                if let lexer::Token::Command(_) = com {
+                    println!("RUN {} {:?}", pc, com);
+                }
             }
-        }
-        'z' => secondary_buffer.lock().unwrap().clear(),
-        '&' => {
-            let buffer_lock = buffer.lock().unwrap();
-            let mut copy_lock = copy.lock().unwrap();
-            copy_lock.buffer = buffer_lock.buffer.clone();
-            copy_lock.cursor = buffer_lock.cursor;
-        }
-        '^' => {
-            let mut buffer_lock = buffer.lock().unwrap();
-            buffer_lock.cursor = copy.lock().unwrap().cursor;
-        }
-        '$' => {
-            if fs::create_dir(&*secondary_buffer.lock().unwrap()).is_err() {
-                println!("?");
-            }
-        }
-        '%' => {
-            if fs::remove_file(&*secondary_buffer.lock().unwrap()).is_err() {
-                println!("?");
-            }
-        }
-        '/' => {
-            let buffers_cursor_ = buffers_cursor.lock().unwrap();
-            let buffers_ = buffers.lock().unwrap();
-            let str_new = &String::new();
-            let macros = buffers_.get(*buffers_cursor_).unwrap_or(str_new);
-            handle_char(&macros, buffer, &Arc::new(Mutex::new(false)), &Arc::new(Mutex::new(false)),
-                copy, secondary_buffer, buffers_cursor, buffers, &Arc::new(Mutex::new(String::new())));
-        }
-        '+' => {
-            let mut buffers_cursor = buffers_cursor.lock().unwrap();
-            *buffers_cursor = ( *buffers_cursor + 1 ) % 10;
-        }
-        '-' => {
-            let mut buffers_cursor = buffers_cursor.lock().unwrap();
-            *buffers_cursor = ( *buffers_cursor - 1 ) % 10;
-        }
-        ':' => {
-            let mut buffers = buffers.lock().unwrap();
-            let buffers_cursor = buffers_cursor.lock().unwrap();
-            buffers[*buffers_cursor] = (*secondary_buffer.lock().unwrap()).clone().to_string();
-            
-        }
-        '~' => {
-            let buffers = buffers.lock().unwrap();
-            let buffers_cursor = buffers_cursor.lock().unwrap();
-            let mut secondary_buffer = secondary_buffer.lock().unwrap();
-            *secondary_buffer = (&*buffers[*buffers_cursor]).to_string();
-        }
-        '?' => {
-            let buffers_cursor_ = buffers_cursor.lock().unwrap();
-            let buffers_ = buffers.lock().unwrap();
-            let str_new = &String::new();
-            let macros = buffers_.get(*buffers_cursor_).unwrap_or(str_new);
-            if (*buffer.lock().unwrap().buffer).contains(&*secondary_buffer.lock().unwrap()) {
-                handle_char(&macros, buffer, &Arc::new(Mutex::new(false)), &Arc::new(Mutex::new(false)),
-                copy, secondary_buffer, buffers_cursor, buffers, &Arc::new(Mutex::new(String::new())));
-            }
-        }
 
-        '*' => {
-            let buffers_cursor_ = buffers_cursor.lock().unwrap();
-            let buffers_ = buffers.lock().unwrap();
-            let str_new = &String::new();
-            let macros = buffers_.get(*buffers_cursor_).unwrap_or(str_new);
-            loop {
-                handle_char(&macros, buffer, &Arc::new(Mutex::new(false)), &Arc::new(Mutex::new(false)),
-                copy, secondary_buffer, buffers_cursor, buffers, &Arc::new(Mutex::new(String::new())));
+            match com {
+                &lexer::Token::Command('a') => {
+                    if pc + 1 != commands.len() {
+                        let args = commands[pc + 1].clone();
+                        let add_m = lexer::extract_var(args).unwrap_or(String::new());
+                        if let Some(add_m) = vars.lock().unwrap().get(&add_m) {
+                            let mut buffer = buffer.lock().unwrap();
+
+                            for c in add_m.chars() {
+                                buffer.add_char(c);
+                            }
+                        }
+                        pc += 1;
+                    }
+                }
+                &lexer::Token::Command('b') => buffer.lock().unwrap().cur_move_left(),
+                &lexer::Token::Command('f') => buffer.lock().unwrap().cur_move_right(),
+                &lexer::Token::Command('r') => buffer.lock().unwrap().remove_char(),
+                &lexer::Token::Command('R') => {
+                    let mut buffer_lock = buffer.lock().unwrap();
+                    buffer_lock.buffer = String::new();
+                    buffer_lock.cursor = 0;
+                }
+                &lexer::Token::Command('v') => println!("{}", buffer.lock().unwrap().buffer),
+                &lexer::Token::Command('q') => process::exit(0),
+                &lexer::Token::Command('#') => break,
+                &lexer::Token::Command('s') => {
+                    if pc + 1 != commands.len() {
+                        let args = commands[pc + 1].clone();
+                        let search_pat = lexer::extract_var(args).unwrap_or(String::new());
+                        if let Some(search_pat) = vars.lock().unwrap().get(&search_pat) {
+                            let mut buffer = buffer.lock().unwrap();
+
+                            if let Some(cur_pos) = buffer.buffer.find(search_pat) {
+                                buffer.cursor = cur_pos;
+                            }
+                        }
+
+                        pc += 1;
+                    }
+                }
+
+                &lexer::Token::Command('@') => {
+                    if pc + 1 != commands.len() && pc + 2 != commands.len() {
+                        let varname = commands[pc + 1].clone();
+                        let varname = lexer::extract_var(varname).unwrap_or(String::new());
+                        let text = commands[pc + 2].clone();
+                        let text = lexer::extract_argument(text).unwrap_or(String::new());
+                        vars.lock().unwrap().insert(varname, text);
+                        pc += 2;
+                    }
+                }
+
+                &lexer::Token::Command('!') => {
+                    if pc + 1 != commands.len() {
+                        let filename = commands[pc + 1].clone();
+                        let filename = lexer::extract_var(filename).unwrap_or(String::new());
+                        if let Some(filename) = vars.lock().unwrap().get(&filename) {
+                            let mut buffer = buffer.lock().unwrap();
+
+                            buffer.filename = filename.to_string();
+                        }
+                        pc += 1;
+                    }
+                }
+
+                &lexer::Token::Command('S') => {
+                    let buffer_lock = buffer.lock().unwrap();
+                    if let Ok(mut file) = fs::File::create(&buffer_lock.filename) {
+                        let _ = file.write_all(buffer_lock.buffer.as_bytes());
+                    }
+                }
+                &lexer::Token::Command('x') => {
+                    let mut buffer_lock = buffer.lock().unwrap();
+                    if fs::File::open(&buffer_lock.filename)
+                        .and_then(|mut file| file.read_to_string(&mut buffer_lock.buffer))
+                        .is_err()
+                    {
+                        println!("?");
+                    }
+                }
+                &lexer::Token::Command('V') => {
+                    if pc + 1 != commands.len() {
+                        let args = commands[pc + 1].clone();
+                        let varname = lexer::extract_var(args).unwrap_or(String::new());
+                        if let Some(text) = vars.lock().unwrap().get(&varname) {
+                            println!("{}", text);
+                        }
+                        pc += 1;
+                    }
+                }
+                _ => {}
+            }
+
+            if com == &lexer::Token::MultiLengthCommand("I@".to_string()) {
+                if pc + 1 != commands.len() && pc + 2 != commands.len() {
+                    let varname = commands[pc + 1].clone();
+                    let varname = lexer::extract_var(varname).unwrap_or(String::new());
+                    let int = commands[pc + 2].clone();
+                    let int = lexer::extract_integer(int).unwrap_or(0);
+                    vars_i.lock().unwrap().insert(varname, int);
+                    pc += 2;
+                }
+            }
+            if com == &lexer::Token::MultiLengthCommand("I@v".to_string()) {
+                if pc + 1 < commands.len() && pc + 2 < commands.len() {
+                    let varname = commands[pc + 1].clone();
+                    let varname = lexer::extract_var(varname).unwrap_or(String::new());
+                    let varname_ = commands[pc + 2].clone();
+                    let varname_ = lexer::extract_var(varname_).unwrap_or(String::new());
+
+                    // まず不変で参照を取得
+                    let mut vars_i_ = vars_i.lock().unwrap();
+                    let mut vars_i = vars_i_.clone();
+
+                    let target = vars_i.get(&varname_).unwrap_or(&0); // デフォルトは "0"
+
+                    // 次に可変で借用
+                    vars_i_.insert(varname, target.clone());
+                    pc += 2;
+                }
+            }
+            if com == &lexer::Token::MultiLengthCommand("IA".to_string()) {
+                if pc + 1 < commands.len() && pc + 2 < commands.len() {
+                    let var_name_a =
+                        lexer::extract_var(commands[pc + 1].clone()).unwrap_or(String::new());
+                    let var_name_b =
+                        lexer::extract_var(commands[pc + 2].clone()).unwrap_or(String::new());
+
+                    let mut result = 0;
+
+                    {
+                        let vars_i = vars_i.lock().unwrap();
+                        let a = vars_i.get(&var_name_a).unwrap_or(&0);
+                        let b = vars_i.get(&var_name_b).unwrap_or(&0);
+
+                        result = a + b;
+                        #[cfg(debug_assertions)]
+                        println!("RESULT {}", result)
+                    }
+
+                    let mut vars_i = vars_i.lock().unwrap();
+                    vars_i.insert(var_name_a, result);
+
+                    pc += 2;
+                }
+            }
+            if com == &lexer::Token::MultiLengthCommand("IS".to_string()) {
+                if pc + 1 < commands.len() && pc + 2 < commands.len() {
+                    let var_name_a =
+                        lexer::extract_var(commands[pc + 1].clone()).unwrap_or(String::new());
+                    let var_name_b =
+                        lexer::extract_var(commands[pc + 2].clone()).unwrap_or(String::new());
+
+                    let mut result = 0;
+
+                    {
+                        let vars_i = vars_i.lock().unwrap();
+                        let a = vars_i.get(&var_name_a).unwrap_or(&0);
+                        let b = vars_i.get(&var_name_b).unwrap_or(&0);
+
+                        result = a - b;
+                        #[cfg(debug_assertions)]
+                        println!("RESULT {}", result)
+                    }
+
+                    let mut vars_i = vars_i.lock().unwrap();
+                    vars_i.insert(var_name_a, result);
+
+                    pc += 2;
+                }
+            }
+            if com == &lexer::Token::MultiLengthCommand("IM".to_string()) {
+                if pc + 1 < commands.len() && pc + 2 < commands.len() {
+                    let var_name_a =
+                        lexer::extract_var(commands[pc + 1].clone()).unwrap_or(String::new());
+                    let var_name_b =
+                        lexer::extract_var(commands[pc + 2].clone()).unwrap_or(String::new());
+
+                    let mut result = 0;
+
+                    {
+                        let vars_i = vars_i.lock().unwrap();
+                        let a = vars_i.get(&var_name_a).unwrap_or(&0);
+                        let b = vars_i.get(&var_name_b).unwrap_or(&0);
+
+                        result = a * b;
+                        #[cfg(debug_assertions)]
+                        println!("RESULT {}", result)
+                    }
+
+                    let mut vars_i = vars_i.lock().unwrap();
+                    vars_i.insert(var_name_a, result);
+
+                    pc += 2;
+                }
+            }
+            if com == &lexer::Token::MultiLengthCommand("ID".to_string()) {
+                if pc + 1 < commands.len() && pc + 2 < commands.len() {
+                    let var_name_a =
+                        lexer::extract_var(commands[pc + 1].clone()).unwrap_or(String::new());
+                    let var_name_b =
+                        lexer::extract_var(commands[pc + 2].clone()).unwrap_or(String::new());
+
+                    let mut result = 0;
+
+                    {
+                        let vars_i = vars_i.lock().unwrap();
+                        let a = vars_i.get(&var_name_a).unwrap_or(&0);
+                        let b = vars_i.get(&var_name_b).unwrap_or(&0);
+
+                        result = a / b;
+                        #[cfg(debug_assertions)]
+                        println!("RESULT {}", result)
+                    }
+
+                    let mut vars_i = vars_i.lock().unwrap();
+                    vars_i.insert(var_name_a, result);
+
+                    pc += 2;
+                }
+            }
+
+            if com == &lexer::Token::MultiLengthCommand("Io".to_string()) {
+                if pc + 1 != commands.len() {
+                    let a = commands[pc + 1].clone();
+                    let a = lexer::extract_var(a).unwrap_or(String::new());
+
+                    let vars_i = vars_i.lock().unwrap();
+
+                    let av = vars_i.get(&a).unwrap_or(&0);
+                    let av_s = av.to_string();
+
+                    for c in av_s.chars() {
+                        buffer.lock().unwrap().add_char(c);
+                    }
+
+                    pc += 1;
+                }
+            }
+            if com == &lexer::Token::MultiLengthCommand("LI".to_string()) {
+                if pc + 1 != commands.len() {
+                    let a = commands[pc + 1].clone();
+                    if let lexer::Token::Code(code) = a {
+                        loop {
+                            handle_command(&code, buffer, copy, secondary_buffer, vars, vars_i);
+                        }
+                    }
+                }
+
+                pc += 1
+            }
+            if com == &lexer::Token::MultiLengthCommand("Lo".to_string()) {
+                if pc + 1 != commands.len() && pc + 2 != commands.len() {
+                    let a = commands[pc + 1].clone();
+                    let b: lexer::Token = commands[pc + 2].clone();
+                    if let lexer::Token::Integer(count) = a {
+                        if let lexer::Token::Code(code) = b {
+                            for _ in 0..count {
+                                handle_command(&code, buffer, copy, secondary_buffer, vars, vars_i);
+                            }
+                        }
+                    }
+                }
+
+                pc += 2;
             }
         }
-
-        'w' => {
-            thread::sleep(time::Duration::from_millis(10));
-        }
-        _ => (),
+        pc += 1;
+        #[cfg(debug_assertions)]
+        thread::sleep(time::Duration::from_millis(100));
     }
-    false
 }
